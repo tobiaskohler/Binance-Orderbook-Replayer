@@ -4,7 +4,7 @@ import ujson
 from misc import load_config
 import sys
 import time
-
+from datetime import datetime
 
 
 class OrderbookReplayer():
@@ -25,6 +25,8 @@ class OrderbookReplayer():
         self.symbol = symbol
         self.begin = begin.replace(':', '')
         self.end = end.replace(':', '')
+        self.end_datetime = datetime.strptime(f'{self.date} {end}', '%Y%m%d %H:%M:%S')
+        
         self.config = load_config()
         #self.data_dir = self.config['data_warehouse_path'] #PRODUCTION
         self.data_dir = '../test_data_rigged'
@@ -33,7 +35,7 @@ class OrderbookReplayer():
     
 
 
-    def get_snapshot_files(self) -> dict:
+    def _get_snapshot_files(self) -> dict:
         
         snapshot_files_dict = {}
         
@@ -64,7 +66,7 @@ class OrderbookReplayer():
             return None
         
     
-    def merge_update_files(self) -> ujson:
+    def _merge_update_files(self) -> str:
 
         update_files = os.listdir(os.path.join(self.data_dir, self.date, self.symbol, 'orderbook_updates'))
         
@@ -78,7 +80,9 @@ class OrderbookReplayer():
             
             update_files_list.append(update_file_path)
         
-        with open(os.path.join(self.data_dir, self.date, self.symbol, 'orderbook_updates', 'all_updates.txt'), 'w') as outfile:
+        all_updates_path = os.path.join(self.data_dir, self.date, self.symbol, 'orderbook_updates', 'all_updates.txt')
+        
+        with open(all_updates_path, 'w') as outfile:
             
             for filename in update_files_list:
 
@@ -91,22 +95,106 @@ class OrderbookReplayer():
                         outfile.write(file_contents)
         
                 
-        print(f'Found {len(update_files_list)} update files for {self.symbol} on {self.date} between {self.begin} and {self.end}')
+        print(f'Merged {len(update_files_list)} update files for {self.symbol} on {self.date} between {self.begin} and {self.end} to all_updates.txt')
 
-        return update_files_list
+        return all_updates_path
+
+    def replay_orderbook(self, auto: bool=True) -> None:
+        '''
+        auto: bool
+            If True, automatic replay of all snapshots and updates between begin and end every 5 seconds
+            If False, manual replay of snapshots and updates by hitting key 'n' for next state
+        '''
+        
+        snapshot_files_dict = self._get_snapshot_files()
+            
+        # Sanity check to ensure correct order of snapshot files
+        for i, (key, value) in enumerate(snapshot_files_dict.items()):
+            if i == 0:
+                continue
+            
+            prev_key, prev_value = list(snapshot_files_dict.items())[i-1]
+            
+            if value < prev_value:
+                print(f"Alert: {key} has a smaller value ({value}) than {prev_key} ({prev_value}). Order replay not possible, chronological order of snapshot files is not correct.")
+                
+            else:
+                print("Chronological order of snapshot files is correct.")
+
+        depth_updates_path = self._merge_update_files()
+        depth_updates = pd.read_json(depth_updates_path, lines=True).drop(columns=['e', 's'])
 
 
+    #6 loop over snapshot-list, starting to read first available snapshot file, updating with updates until u of next snapshot file is reached
+
+        # https://binance-docs.github.io/apidocs/spot/en/#diff-depth-stream
+        # 1. Drop any event where u is <= lastUpdateId in the snapshot.
+        # The first processed event should have U <= lastUpdateId+1 AND u >= lastUpdateId+1.
+        # While listening to the stream, each new event's U should be equal to the previous event's u+1.
+        # The data in each event is the absolute quantity for a price level.
+        # If the quantity is 0, remove the price level.
+        # Receiving an event that removes a price level that is not in your local order book can happen and is normal.
+
+        if auto:
+            
+            for key, value in snapshot_files_dict.items():
+                    
+                print(f'Loading: lastUpdateId: {key} // snapshot file {value}.')
+            
+                with open(value, 'r') as f:
+                    
+                    snapshot = ujson.load(f)
+
+                    bids = pd.DataFrame(snapshot['bids'], columns=['price', 'quantity'], dtype=float)
+                    bids['side'] = 'bid'
+                    asks = pd.DataFrame(snapshot['asks'], columns=['price', 'quantity'], dtype=float)
+                    asks['side'] = 'ask'
+                    
+                    ob_snapshot_t = pd.concat([bids, asks], axis=0).sort_values(by='price', ascending=False)
+                    
+                    len_depth_updates_before_pruning = len(depth_updates)
+                    last_update_id_snapshot = key
+
+                    
+                    # 1. drop any event where u is <= lastUpdateId in the snapshot
+                    depth_updates = depth_updates[depth_updates['u'] > last_update_id_snapshot] # ENSURES THAT LOOP IS GETTING QUICKER OVER TIME
+                    first_final_update_id_depth_update = depth_updates['u'].iloc[0]
+                    
+                    print(f'lastUpdateId of snapshot: {last_update_id_snapshot}\n"First" final update ID of depth_updates: {first_final_update_id_depth_update}')
+                    print(f'Length of depth_updates before pruning: {len_depth_updates_before_pruning}\nLength of depth_updates after pruning: {len(depth_updates)}')
+
+                    if key != list(snapshot_files_dict.keys())[-1]: #check if last key
+                        
+                        # loop over depth_updates, beginning with first update after lastUpdateId of snapshot
+                        for i, row in depth_updates.iterrows():
+                            
+                            # START RE-CREATING ORDERBOOK AT TIME T
+                            
+                            #2. The first processed event should have U <= lastUpdateId+1 AND u >= lastUpdateId+1
+                            # if row['U'] <= last_update_id_snapshot + 1 and row['u'] >= last_update_id_snapshot + 1:
+                            #print(f'First update ID in event (U) of current row: {row["U"]}\nFinal update ID in event (u) of current row: {row["u"]}')
+                    
+                            # break loop if U of current row is greater than u of next snapshot file (key+i)
+                            if row['U'] > list(snapshot_files_dict.keys())[list(snapshot_files_dict.keys()).index(key)+1]:
+                                print(f'First update ID in event (U={row["U"]}) of current row is greater than u of next snapshot file (key+i={list(snapshot_files_dict.keys())[list(snapshot_files_dict.keys()).index(key)+1]}). Break loop. Going to next snapshot file.')
+                                
+                                break
+                            
+                    else: # if last key, loop over all remaining depth_updates, since no more up-to-date snapshot files are available
+                        
+                        for i, row in depth_updates.iterrows():
+                            
+                            # START RE-CREATING ORDERBOOK AT TIME T
+                            event_time = row['E']
+                            event_time_formatted = datetime.fromtimestamp(int(event_time)/1000)
+                            
+                            # #compare event_time with end
+                            if event_time_formatted > self.end_datetime:
+                                print(f'Event time {event_time_formatted} is greater than specified end time {self.end_datetime}. Break loop.')
+                                break
 
  
-#6 loop over snapshot-list, starting to read first available snapshot file, updating with updates until u of next snapshot file is reached
 
-    # https://binance-docs.github.io/apidocs/spot/en/#diff-depth-stream
-    # Drop any event where u is <= lastUpdateId in the snapshot.
-    # The first processed event should have U <= lastUpdateId+1 AND u >= lastUpdateId+1.
-    # While listening to the stream, each new event's U should be equal to the previous event's u+1.
-    # The data in each event is the absolute quantity for a price level.
-    # If the quantity is 0, remove the price level.
-    # Receiving an event that removes a price level that is not in your local order book can happen and is normal.
     
     
 if __name__ == '__main__':
@@ -114,10 +202,9 @@ if __name__ == '__main__':
     
     # measure time
     start_time = time.time()
-    ob_replayer = OrderbookReplayer(date='20230425', symbol='ADAUSDT', begin='03:00:00', end='05:00:00')
+    ob_replayer = OrderbookReplayer(date='20230425', symbol='BTCUSDT', begin='12:00:00', end='13:00:00')
     
-    ob_replayer.get_snapshot_files()
-    ob_replayer.merge_update_files()
+    ob_replayer.replay_orderbook(auto=True)
     
     end_time = time.time()
     execution_time_ms = (end_time - start_time) * 1000
