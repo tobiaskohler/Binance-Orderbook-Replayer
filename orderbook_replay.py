@@ -30,6 +30,7 @@ class OrderbookReplayer():
         self.config = load_config()
         #self.data_dir = self.config['data_warehouse_path'] #PRODUCTION
         self.data_dir = '../test_data_rigged'
+        self.data_output_dir = self.config['data_output_path']
         
         print(f'Initializing OrderbookReplayer for {symbol} from {begin} to {end}')
     
@@ -95,7 +96,7 @@ class OrderbookReplayer():
                         outfile.write(file_contents)
         
                 
-        print(f'Merged {len(update_files_list)} update files for {self.symbol} on {self.date} between {self.begin} and {self.end} to all_updates.txt')
+        print(f'Merged {len(update_files_list)-1} update files for {self.symbol} on {self.date} between {self.begin} and {self.end} to all_updates.txt')
 
         return all_updates_path
 
@@ -129,11 +130,11 @@ class OrderbookReplayer():
 
         # https://binance-docs.github.io/apidocs/spot/en/#diff-depth-stream
         # 1. Drop any event where u is <= lastUpdateId in the snapshot.
-        # The first processed event should have U <= lastUpdateId+1 AND u >= lastUpdateId+1.
-        # While listening to the stream, each new event's U should be equal to the previous event's u+1.
-        # The data in each event is the absolute quantity for a price level.
-        # If the quantity is 0, remove the price level.
-        # Receiving an event that removes a price level that is not in your local order book can happen and is normal.
+        # 2. The first processed event should have U <= lastUpdateId+1 AND u >= lastUpdateId+1.
+        # 3. While listening to the stream, each new event's U should be equal to the previous event's u+1.
+        # 4. The data in each event is the absolute quantity for a price level.
+        # 5. If the quantity is 0, remove the price level.
+        # 6. Receiving an event that removes a price level that is not in your local order book can happen and is normal.
 
         if auto:
             
@@ -170,8 +171,50 @@ class OrderbookReplayer():
                             
                             # START RE-CREATING ORDERBOOK AT TIME T
                             
+                            # extract bids and asks from current row and update ob_snapshot_t
+                            updated_bids = pd.DataFrame(row['b'], columns=['price', 'quantity'], dtype=float)
+                            updated_bids['side'] = 'bid'
+                            updated_asks = pd.DataFrame(row['a'], columns=['price', 'quantity'], dtype=float)
+                            updated_asks['side'] = 'ask'
+                            
+                            ob_update_t = pd.concat([updated_bids, updated_asks], axis=0).sort_values(by='price', ascending=False)
+                            
+                            # Combine ob_snapshot_t and ob_update_t 
+                            # IMPLEMENTATION LOGIC #
+                            # If price level exists in both, replace quantity with quantity of ob_updated_t
+                            # If price level only exists in ob_update_t, add it to ob_snapshot_t
+                            # If price level only exists in ob_snapshot_t, keep it
+                            # If price is 0, remove it from ob_snapshot_t
+                            
+                            
+                            for i, r in ob_update_t.iterrows():
+                                
+                                # 1. If price level exists in both, replace quantity with quantity of ob_updated_t
+                                if r['price'] in ob_snapshot_t['price'].values:
+                                    ob_snapshot_t.loc[ob_snapshot_t['price'] == r['price'], 'quantity'] = r['quantity']
+                                    
+                                # 2. If price level only exists in ob_update_t, add it to ob_snapshot_t
+                                elif r['price'] not in ob_snapshot_t['price'].values:
+                                    #ob_snapshot_t = ob_snapshot_t.append(r, ignore_index=True)
+                                    #use concat instead of append to avoid warning
+                                    ob_snapshot_t = pd.concat([ob_snapshot_t, r.to_frame().T], axis=0, ignore_index=True)
+                                    # sort ob_snapshot_t by price
+                                    ob_snapshot_t = ob_snapshot_t.sort_values(by='price', ascending=False)
+                                    print(f'Added price level {r["price"]} to orderbook.')
+                                
+                                # 3. If price is 0, remove it from ob_snapshot_t
+                                
+                                if r['quantity'] == 0:
+                                    ob_snapshot_t = ob_snapshot_t[ob_snapshot_t['price'] != r['price']]
+                                    print(f'Removed price level {r["price"]} from orderbook.')
+                            
+                            ob_snapshot_t_txt = ob_snapshot_t.to_string(index=False)
+                            
+                            with open (f'./orderbooks/orderbook_{key}_{i}.txt', 'w') as f:
+                                f.write(ob_snapshot_t_txt)
+                            
+
                             #2. The first processed event should have U <= lastUpdateId+1 AND u >= lastUpdateId+1
-                            # if row['U'] <= last_update_id_snapshot + 1 and row['u'] >= last_update_id_snapshot + 1:
                             #print(f'First update ID in event (U) of current row: {row["U"]}\nFinal update ID in event (u) of current row: {row["u"]}')
                     
                             # break loop if U of current row is greater than u of next snapshot file (key+i)
@@ -180,15 +223,17 @@ class OrderbookReplayer():
                                 
                                 break
                             
-                    else: # if last key, loop over all remaining depth_updates, since no more up-to-date snapshot files are available
+                    else: # if last key, loop over all remaining depth_updates until specified end, since no more up-to-date snapshot files are available
                         
                         for i, row in depth_updates.iterrows():
                             
                             # START RE-CREATING ORDERBOOK AT TIME T
+                            
+                            
+                            
                             event_time = row['E']
                             event_time_formatted = datetime.fromtimestamp(int(event_time)/1000)
                             
-                            # #compare event_time with end
                             if event_time_formatted > self.end_datetime:
                                 print(f'Event time {event_time_formatted} is greater than specified end time {self.end_datetime}. Break loop.')
                                 break

@@ -48,6 +48,11 @@ def read_snapshot_file(pair, date, begin_time, end_time):
                     
                     ob_snapshot = pd.concat([bids, asks], axis=0).sort_values(by='price', ascending=False)
                     
+                    ob_snapshot_json = ob_snapshot.to_json(orient='records')
+                    print(ob_snapshot_json)
+                    
+                    with open ('ob_snapshot.json', 'w') as f:
+                        f.write(ob_snapshot_json)
                     
                     # implement above as numpy  
                     # bids = np.array(snapshot_file_json['bids'])
@@ -67,65 +72,9 @@ def read_snapshot_file(pair, date, begin_time, end_time):
         print('No snapshot files found. Choose another date!')
         return
     
-
-    snapshot_file = os.path.join(data_dir, date, pair, 'orderbook_snapshots', f'{date}000000.txt')
     
-    
-    
-    
-    # with open(snapshot_file, 'r') as f:
-    #     data = f.read().strip().split('\n')
-    #     bids = np.array([list(map(float, x.split())) for x in data[:100]])
-    #     asks = np.array([list(map(float, x.split())) for x in data[100:]])
-    #     last_update_id = int(data[-1])
 
-    # # Read the order book update file
-    # update_file = os.path.join(data_dir, date, pair, 'orderbook_updates', f'{date}000000.txt')
-    # with open(update_file, 'r') as f:
-    #     data = f.read().strip().split('\n')
-    #     for x in data:
-    #         side, price, quantity = x.split()
-    #         price = float(price)
-    #         quantity = float(quantity)
-    #         if side == 'bid':
-    #             row = np.where(bids[:, 0] == price)[0]
-    #             if len(row) == 0:
-    #                 row = np.searchsorted(bids[:, 0], price)
-    #                 bids = np.insert(bids, row, [price, 0], axis=0)
-    #             bids[row, 1] += quantity
-    #         elif side == 'ask':
-    #             row = np.where(asks[:, 0] == price)[0]
-    #             if len(row) == 0:
-    #                 row = np.searchsorted(asks[:, 0], price)
-    #                 asks = np.insert(asks, row, [price, 0], axis=0)
-    #             asks[row, 1] += quantity
-
-    # # Aggregate the bids and asks at each price level
-    # bids_agg = {}
-    # asks_agg = {}
-    # for row in bids:
-    #     price = row[0]
-    #     quantity = row[1]
-    #     if quantity == 0:
-    #         continue
-    #     level = int(np.log10(price))
-    #     if level not in bids_agg:
-    #         bids_agg[level] = {}
-    #     if price not in bids_agg[level]:
-    #         bids_agg[level][price] = 0
-    #     bids_agg[level][price] += quantity
-    # for row in asks:
-    #     price = row[0]
-    #     quantity = row[1]
-    #     if quantity == 0:
-    #         continue
-    #     level = int(np.log10(price))
-    #     if level not in asks_agg:
-    #         asks_agg[level] = {}
-    #     if price not in asks_agg[level]:
-    #         asks_agg[level][price] = 0
-    #     asks_agg[level][price] += quantity
-
+ 
 if __name__ == '__main__':
     
     # Define the path to the data directory

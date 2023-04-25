@@ -1,4 +1,5 @@
 data_warehouse_path: ../data
+data_output_path: /orderbooks
 symbols:
   - BTCUSDT
   - ETHUSDT
