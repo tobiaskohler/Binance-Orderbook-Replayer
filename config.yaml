@@ -1,0 +1,5 @@
+data_warehouse_path: ../data
+symbols:
+  - BTCUSDT
+  - ETHUSDT
+  - ADAUSDT
