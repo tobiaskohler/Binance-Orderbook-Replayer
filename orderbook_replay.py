@@ -186,8 +186,7 @@ class OrderbookReplayer():
                             # If price level only exists in ob_snapshot_t, keep it
                             # If price is 0, remove it from ob_snapshot_t
                             
-                            
-                            for i, r in ob_update_t.iterrows():
+                            for _, r in ob_update_t.iterrows():
                                 
                                 # 1. If price level exists in both, replace quantity with quantity of ob_updated_t
                                 if r['price'] in ob_snapshot_t['price'].values:
@@ -195,19 +194,17 @@ class OrderbookReplayer():
                                     
                                 # 2. If price level only exists in ob_update_t, add it to ob_snapshot_t
                                 elif r['price'] not in ob_snapshot_t['price'].values:
-                                    #ob_snapshot_t = ob_snapshot_t.append(r, ignore_index=True)
-                                    #use concat instead of append to avoid warning
+
                                     ob_snapshot_t = pd.concat([ob_snapshot_t, r.to_frame().T], axis=0, ignore_index=True)
-                                    # sort ob_snapshot_t by price
                                     ob_snapshot_t = ob_snapshot_t.sort_values(by='price', ascending=False)
                                     print(f'Added price level {r["price"]} to orderbook.')
                                 
                                 # 3. If price is 0, remove it from ob_snapshot_t
-                                
                                 if r['quantity'] == 0:
                                     ob_snapshot_t = ob_snapshot_t[ob_snapshot_t['price'] != r['price']]
                                     print(f'Removed price level {r["price"]} from orderbook.')
-                            
+                                
+                                
                             ob_snapshot_t_txt = ob_snapshot_t.to_string(index=False)
                             
                             with open (f'./orderbooks/orderbook_{key}_{i}.txt', 'w') as f:
