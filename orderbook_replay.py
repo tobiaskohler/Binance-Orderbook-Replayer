@@ -5,7 +5,7 @@ from misc import load_config
 import sys
 import time
 from datetime import datetime
-
+import sqlite3  
 
 class OrderbookReplayer():
     
@@ -141,6 +141,16 @@ class OrderbookReplayer():
             for key, value in snapshot_files_dict.items():
                     
                 print(f'Loading: lastUpdateId: {key} // snapshot file {value}.')
+                
+                conn = sqlite3.connect(f'./orderbooks/orderbook_{key}.db')
+                c = conn.cursor()
+                columns = ['lastUpdateId', 'price', 'quantity', 'side']
+                
+                c.execute('''DROP TABLE IF EXISTS snapshots''')
+                c.execute('''CREATE TABLE snapshots
+                                    (id INTEGER PRIMARY KEY AUTOINCREMENT, firstUpdateId TEXT, price TEXT, quantity TEXT, side TEXT)''')
+
+                conn.commit()
             
                 with open(value, 'r') as f:
                     
@@ -171,7 +181,6 @@ class OrderbookReplayer():
                             
                             # START RE-CREATING ORDERBOOK AT TIME T
                             
-                            # extract bids and asks from current row and update ob_snapshot_t
                             updated_bids = pd.DataFrame(row['b'], columns=['price', 'quantity'], dtype=float)
                             updated_bids['side'] = 'bid'
                             updated_asks = pd.DataFrame(row['a'], columns=['price', 'quantity'], dtype=float)
@@ -186,48 +195,74 @@ class OrderbookReplayer():
                             # If price level only exists in ob_snapshot_t, keep it
                             # If price is 0, remove it from ob_snapshot_t
                             
-                            for _, r in ob_update_t.iterrows():
+                            def _loop_over_updates(ob_snapshot_t: pd.DataFrame, up_update_t: pd.DataFrame) -> pd.DataFrame:
                                 
-                                # 1. If price level exists in both, replace quantity with quantity of ob_updated_t
-                                if r['price'] in ob_snapshot_t['price'].values:
-                                    ob_snapshot_t.loc[ob_snapshot_t['price'] == r['price'], 'quantity'] = r['quantity']
+                                for _, r in ob_update_t.iterrows():
                                     
-                                # 2. If price level only exists in ob_update_t, add it to ob_snapshot_t
-                                elif r['price'] not in ob_snapshot_t['price'].values:
+                                    first_update_id_row = row['U']
+                                    
+                                    # 1. If price level exists in both, replace quantity with quantity of ob_updated_t
+                                    if r['price'] in ob_snapshot_t['price'].values:
+                                        ob_snapshot_t.loc[ob_snapshot_t['price'] == r['price'], 'quantity'] = r['quantity']
+                                        
+                                    # 2. If price level only exists in ob_update_t, add it to ob_snapshot_t
+                                    elif r['price'] not in ob_snapshot_t['price'].values:
 
-                                    ob_snapshot_t = pd.concat([ob_snapshot_t, r.to_frame().T], axis=0, ignore_index=True)
-                                    ob_snapshot_t = ob_snapshot_t.sort_values(by='price', ascending=False)
-                                    print(f'Added price level {r["price"]} to orderbook.')
-                                
-                                # 3. If price is 0, remove it from ob_snapshot_t
-                                if r['quantity'] == 0:
-                                    ob_snapshot_t = ob_snapshot_t[ob_snapshot_t['price'] != r['price']]
-                                    print(f'Removed price level {r["price"]} from orderbook.')
-                                
-                                
-                            ob_snapshot_t_txt = ob_snapshot_t.to_string(index=False)
+                                        ob_snapshot_t = pd.concat([ob_snapshot_t, r.to_frame().T], axis=0, ignore_index=True)
+                                        ob_snapshot_t = ob_snapshot_t.sort_values(by='price', ascending=False)
+                                        print(f'Added price level {r["price"]} to orderbook.')
+                                    
+                                    # 3. If price is 0, remove it from ob_snapshot_t
+                                    if r['quantity'] == 0:
+                                        ob_snapshot_t = ob_snapshot_t[ob_snapshot_t['price'] != r['price']]
+                                        print(f'Removed price level {r["price"]} from orderbook.')
+                                        
+                                    
+                                return ob_snapshot_t, first_update_id_row
                             
-                            with open (f'./orderbooks/orderbook_{key}_{i}.txt', 'w') as f:
-                                f.write(ob_snapshot_t_txt)
+                            ob_snapshot_t, first_update_id_row = _loop_over_updates(ob_snapshot_t, ob_update_t) 
                             
+                            
+                            # Data preparation for SQL
+                            prices_list = ob_snapshot_t['price'].tolist()
+                            quantity_list = ob_snapshot_t['quantity'].tolist()
+                            side_list = ob_snapshot_t['side'].tolist()
+                                                        
+                            query = "INSERT INTO snapshots (firstUpdateId, price, quantity, side) VALUES (?, ?, ?, ?)"
+                            c.execute(query, (first_update_id_row, str(prices_list), str(quantity_list), str(side_list)))   
+                            conn.commit()
 
-                            #2. The first processed event should have U <= lastUpdateId+1 AND u >= lastUpdateId+1
-                            #print(f'First update ID in event (U) of current row: {row["U"]}\nFinal update ID in event (u) of current row: {row["u"]}')
-                    
+
                             # break loop if U of current row is greater than u of next snapshot file (key+i)
                             if row['U'] > list(snapshot_files_dict.keys())[list(snapshot_files_dict.keys()).index(key)+1]:
                                 print(f'First update ID in event (U={row["U"]}) of current row is greater than u of next snapshot file (key+i={list(snapshot_files_dict.keys())[list(snapshot_files_dict.keys()).index(key)+1]}). Break loop. Going to next snapshot file.')
                                 
+                                conn.close()
                                 break
                             
                     else: # if last key, loop over all remaining depth_updates until specified end, since no more up-to-date snapshot files are available
                         
                         for i, row in depth_updates.iterrows():
+                                                        
+                            updated_bids = pd.DataFrame(row['b'], columns=['price', 'quantity'], dtype=float)
+                            updated_bids['side'] = 'bid'
+                            updated_asks = pd.DataFrame(row['a'], columns=['price', 'quantity'], dtype=float)
+                            updated_asks['side'] = 'ask'
                             
-                            # START RE-CREATING ORDERBOOK AT TIME T
+                            ob_update_t = pd.concat([updated_bids, updated_asks], axis=0).sort_values(by='price', ascending=False)
+                            
+                            ob_snapshot_t, first_update_id_row = _loop_over_updates(ob_snapshot_t, ob_update_t) 
+                            
+                            prices_list = ob_snapshot_t['price'].tolist()
+                            quantity_list = ob_snapshot_t['quantity'].tolist()
+                            side_list = ob_snapshot_t['side'].tolist()
+                                                        
+                            query = "INSERT INTO snapshots (firstUpdateId, price, quantity, side) VALUES (?, ?, ?, ?)"
+                            c.execute(query, (first_update_id_row, str(prices_list), str(quantity_list), str(side_list)))   
+                            conn.commit()
                             
                             
-                            
+                            # End loop if event_time is greater than specified end time
                             event_time = row['E']
                             event_time_formatted = datetime.fromtimestamp(int(event_time)/1000)
                             
