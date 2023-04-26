@@ -148,7 +148,7 @@ class OrderbookReplayer():
                 
                 c.execute('''DROP TABLE IF EXISTS snapshots''')
                 c.execute('''CREATE TABLE snapshots
-                                    (id INTEGER PRIMARY KEY AUTOINCREMENT, firstUpdateId TEXT, price TEXT, quantity TEXT, side TEXT)''')
+                                    (id INTEGER PRIMARY KEY AUTOINCREMENT, eventTime INT, firstUpdateId INT, price TEXT, quantity TEXT, side TEXT)''')
 
                 conn.commit()
             
@@ -200,6 +200,7 @@ class OrderbookReplayer():
                                 for _, r in ob_update_t.iterrows():
                                     
                                     first_update_id_row = row['U']
+                                    event_time = row['E']
                                     
                                     # 1. If price level exists in both, replace quantity with quantity of ob_updated_t
                                     if r['price'] in ob_snapshot_t['price'].values:
@@ -218,18 +219,17 @@ class OrderbookReplayer():
                                         print(f'Removed price level {r["price"]} from orderbook.')
                                         
                                     
-                                return ob_snapshot_t, first_update_id_row
+                                return ob_snapshot_t, event_time, first_update_id_row
                             
-                            ob_snapshot_t, first_update_id_row = _loop_over_updates(ob_snapshot_t, ob_update_t) 
-                            
+                            ob_snapshot_t, event_time, first_update_id_row = _loop_over_updates(ob_snapshot_t, ob_update_t) 
                             
                             # Data preparation for SQL
                             prices_list = ob_snapshot_t['price'].tolist()
                             quantity_list = ob_snapshot_t['quantity'].tolist()
                             side_list = ob_snapshot_t['side'].tolist()
                                                         
-                            query = "INSERT INTO snapshots (firstUpdateId, price, quantity, side) VALUES (?, ?, ?, ?)"
-                            c.execute(query, (first_update_id_row, str(prices_list), str(quantity_list), str(side_list)))   
+                            query = "INSERT INTO snapshots (eventTime, firstUpdateId, price, quantity, side) VALUES (?, ?, ?, ?, ?)"
+                            c.execute(query, (int(event_time), int(first_update_id_row), str(prices_list), str(quantity_list), str(side_list)))   
                             conn.commit()
 
 
@@ -251,16 +251,17 @@ class OrderbookReplayer():
                             
                             ob_update_t = pd.concat([updated_bids, updated_asks], axis=0).sort_values(by='price', ascending=False)
                             
-                            ob_snapshot_t, first_update_id_row = _loop_over_updates(ob_snapshot_t, ob_update_t) 
+                            ob_snapshot_t, event_time, first_update_id_row = _loop_over_updates(ob_snapshot_t, ob_update_t) 
                             
+                            # Data preparation for SQL
                             prices_list = ob_snapshot_t['price'].tolist()
                             quantity_list = ob_snapshot_t['quantity'].tolist()
                             side_list = ob_snapshot_t['side'].tolist()
                                                         
-                            query = "INSERT INTO snapshots (firstUpdateId, price, quantity, side) VALUES (?, ?, ?, ?)"
-                            c.execute(query, (first_update_id_row, str(prices_list), str(quantity_list), str(side_list)))   
+                            query = "INSERT INTO snapshots (eventTime, firstUpdateId, price, quantity, side) VALUES (?, ?, ?, ?, ?)"
+                            c.execute(query, (int(event_time), int(first_update_id_row), str(prices_list), str(quantity_list), str(side_list)))   
                             conn.commit()
-                            
+
                             
                             # End loop if event_time is greater than specified end time
                             event_time = row['E']
