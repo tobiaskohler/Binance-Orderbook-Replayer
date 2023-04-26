@@ -100,6 +100,7 @@ class OrderbookReplayer():
 
         return all_updates_path
 
+
     def replay_orderbook(self, auto: bool=True) -> None:
         '''
         auto: bool
