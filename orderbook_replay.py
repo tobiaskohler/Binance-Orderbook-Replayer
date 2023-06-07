@@ -28,8 +28,7 @@ class OrderbookReplayer():
         self.end_datetime = datetime.strptime(f'{self.date} {end}', '%Y%m%d %H:%M:%S')
         
         self.config = load_config()
-        #self.data_dir = self.config['data_warehouse_path'] #PRODUCTION
-        self.data_dir = '../test_data_rigged'
+        self.data_dir = self.config['data_warehouse_path'] #PRODUCTION
         self.data_output_dir = self.config['data_output_path']
         
         print(f'Initializing OrderbookReplayer for {symbol} from {begin} to {end}')
@@ -163,7 +162,6 @@ class OrderbookReplayer():
         
         all_trades = pd.read_json(self._merge_trade_files(), lines=True).drop(columns=['e', 's', 'M', 'a', 'b'])
         
-        #rename column m to marketMaker
         all_trades.rename(columns={'m': 'buyerIsMaker', 'E': 'eventTime', 't': 'tradeId', 'T': 'tradeTime', 'p': 'price', 'q': 'quantity', }, inplace=True)
         
         conn = sqlite3.connect(f'./trades/all_trades.db')
@@ -171,7 +169,6 @@ class OrderbookReplayer():
         conn.commit()
         conn.close()
 
-    #6 loop over snapshot-list, starting to read first available snapshot file, updating with updates until u of next snapshot file is reached
 
         # https://binance-docs.github.io/apidocs/spot/en/#diff-depth-stream
         # 1. Drop any event where u is <= lastUpdateId in the snapshot.
@@ -321,9 +318,8 @@ class OrderbookReplayer():
 if __name__ == '__main__':
     
     
-    # measure time
     start_time = time.time()
-    ob_replayer = OrderbookReplayer(date='20230425', symbol='BTCUSDT', begin='12:00:00', end='13:00:00')
+    ob_replayer = OrderbookReplayer(date='20230501', symbol='ADAUSDT', begin='14:00:00', end='18:00:00')
     
     ob_replayer.replay_orderbook()
     
